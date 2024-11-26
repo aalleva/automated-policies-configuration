@@ -1,14 +1,20 @@
 pipeline {
     agent any
+    
     parameters {
-        string(name: 'ORGANIZATION_ID', defaultValue: "${env.ORGANIZATION_ID ?: ''}", description: 'Organization ID')
+        string(name: 'ORGANIZATION_ID', defaultValue: "${env.ORGANIZATION_ID_01 ?: ''}", description: 'Organization ID')
         string(name: 'ENVIRONMENT_ID', defaultValue: "${env.ENVIRONMENT_ID ?: ''}", description: 'Environment ID')
-        text(name: 'POLICIES_JSON', defaultValue: '', description: 'Paste the JSON policies configuration file here')
+        string(name: 'ENVIRONMENT_TYPE', defaultValue: 'dev', description: 'Environment type (e.g., dev, qa, prod)')
+        string(name: 'REPO_URL', defaultValue: 'git@github.com:aalleva/automated-policies-configuration.git', description: 'Git Repository URL for pipeline code')
+        string(name: 'CHECKOUT_BRANCH', defaultValue: 'main', description: 'Branch to checkout from the repository')
     }
+    
     environment {
-        MULESOFT_API_URL = 'eu1.anypoint.mulesoft.com'
+        MULESOFT_API_URL = 'anypoint.mulesoft.com'
         CURL_TIMEOUT = '30'
+        CONFIG_FOLDER = 'config'
     }
+    
     stages {
         stage('Input Parameters Validation') {
             steps {
@@ -19,11 +25,42 @@ pipeline {
                     if (!params.ENVIRONMENT_ID?.trim()) {
                         error "ENVIRONMENT_ID is missing or invalid."
                     }
-                    if (!params.POLICIES_JSON?.trim()) {
-                        error "POLICIES_JSON is missing or invalid."
+                    if (!params.ENVIRONMENT_TYPE?.trim()) {
+                        error "ENVIRONMENT_TYPE is missing or invalid."
+                    }
+                    if (!params.REPO_URL?.trim()) {
+                        error "REPO_URL is missing or invalid."
+                    }
+                    if (!params.CHECKOUT_BRANCH?.trim()) {
+                        error "CHECKOUT_BRANCH is missing or invalid."
                     }
                     
-                    echo "Validation passed. ORGANIZATION_ID: ${params.ORGANIZATION_ID}, ENVIRONMENT_ID: ${params.ENVIRONMENT_ID}"
+                    echo "Validation passed. ORGANIZATION_ID: ${params.ORGANIZATION_ID}, ENVIRONMENT_ID: ${params.ENVIRONMENT_ID}, REPO_URL: ${params.REPO_URL}, CHECKOUT_BRANCH: ${params.CHECKOUT_BRANCH}"
+                }
+            }
+        }
+        stage('Checkout') {
+            steps {
+                script {
+                    
+                    echo "Cloning repository from URL: ${params.REPO_URL}, branch: ${params.CHECKOUT_BRANCH}"
+                    git branch: "${params.CHECKOUT_BRANCH}", url: "${params.REPO_URL}", credentialsId: 'github-ssh-key'
+                }
+            }
+        }
+        stage('Fetch Configuration File') {
+            steps {
+                script {
+                    def configFilePath = "${WORKSPACE}/${env.CONFIG_FOLDER}/automated-policies-${params.ENVIRONMENT_TYPE}-conf.json"
+                    echo "Reading configuration file: ${configFilePath}"
+
+                    if (!fileExists(configFilePath)) {
+                        error "Configuration file not found: ${configFilePath}"
+                    }
+
+                    // Read and parse the configuration JSON file
+                    def configJsonContent = readFile(configFilePath)
+                    env.CONFIG_JSON = configJsonContent
                 }
             }
         }
@@ -114,7 +151,7 @@ pipeline {
         stage('Create New Policies from JSON') {
             steps {
                 script {
-                    def configJson = readJSON text: params.POLICIES_JSON
+                    def configJson = readJSON text: env.CONFIG_JSON
                     for (policy in configJson) {
                         echo "Creating Policy: Asset ID = ${policy.assetId}, Version = ${policy.assetVersion}"
                         def configData = groovy.json.JsonOutput.toJson(policy.configurationData).replaceAll("'", "'\\\\''")
