@@ -97,91 +97,115 @@ pipeline {
         stage('List Automated Policies') {
             steps {
                 script {
+                    def policiesResponseFile = 'policies_response.json'
                     def policiesResponse = sh(script: """
                       curl --location 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies?environmentId=${params.ENVIRONMENT_ID}' \
                       --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
                       --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
                       --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
-                      --silent --max-time ${env.CURL_TIMEOUT} --write-out 'HTTPSTATUS:%{http_code}' --output policies_response.json
+                      --silent --max-time ${env.CURL_TIMEOUT} --write-out 'HTTPSTATUS:%{http_code}' --output ${policiesResponseFile}
                   """, returnStdout: true).trim()
                     
                     def httpStatus = policiesResponse[-3..-1]
-                    def jsonResponse = readFile('policies_response.json')
+                    def jsonResponse = readFile(policiesResponseFile)
                     
                     if (httpStatus == '200') {
-                        def policiesJson = readJSON text: jsonResponse
-                        echo "Automated Policies found:"
-                        for (policy in policiesJson.automatedPolicies) {
-                            echo "Policy ID: ${policy.id}, Asset ID: ${policy.assetId}, Version: ${policy.assetVersion}"
-                        }
-                        env.POLICIES_TO_DELETE = policiesJson.automatedPolicies*.id.join(",")
+                        echo "Automated Policies fetched successfully."
+                        env.POLICIES_JSON_RESPONSE = jsonResponse
                     } else {
                         error "Error fetching policies. Status code: ${httpStatus}. Response: ${jsonResponse}"
                     }
                 }
             }
         }
-        stage('Delete All Automated Policies') {
-            when {
-                expression {
-                    return env.POLICIES_TO_DELETE != ""
-                }
-            }
-            steps {
-                script {
-                    def policyIds = env.POLICIES_TO_DELETE.split(",")
-                    for (policyId in policyIds) {
-                        echo "Deleting Policy ID: ${policyId}"
-                        def deleteResponse = sh(script: """
-                            curl --location --request DELETE 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies/${policyId}' \
-                            --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
-                            --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
-                            --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
-                            --write-out '%{http_code}' --silent --max-time ${env.CURL_TIMEOUT} --output /dev/null
-                        """, returnStdout: true).trim()
-                        if (deleteResponse == '204') {
-                            echo "Policy ID ${policyId} deleted successfully."
-                        } else {
-                            error "Error deleting Policy ID ${policyId}: ${deleteResponse}"
-                        }
-                    }
-                }
-            }
-        }
-        stage('Create New Policies from JSON') {
+        stage('Check Existing Policies') {
             steps {
                 script {
                     def configJson = readJSON text: env.CONFIG_JSON
-                    for (policy in configJson) {
-                        echo "Creating Policy: Asset ID = ${policy.assetId}, Version = ${policy.assetVersion}"
-                        def configData = groovy.json.JsonOutput.toJson(policy.configurationData).replaceAll("'", "'\\\\''")
-                        def createResponse = sh(script: """
-                            curl --location 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies' \
-                            --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
-                            --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
-                            --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
-                            --header 'Content-Type: application/json' \
-                            --silent \
-                            --data '{
-                                "ruleOfApplication": {
-                                    "technologies": [
-                                        "flexGateway"
-                                    ],
-                                    "environmentId": "${params.ENVIRONMENT_ID}",
-                                    "organizationId": "${params.ORGANIZATION_ID}"
-                                },
-                                "groupId": "${policy.groupId}",
-                                "assetId": "${policy.assetId}",
-                                "assetVersion": "${policy.assetVersion}",
-                                "configurationData": ${configData}
-                            }' \
-                            --write-out '%{http_code}' --max-time ${env.CURL_TIMEOUT} --output /dev/null
-                        """, returnStdout: true).trim()
-                        if (createResponse == '201') {
-                            echo "Policy created successfully: ${policy.assetId}"
-                        } else {
-                            error "Error creating policy: ${policy.assetId}. Response code: ${createResponse}"
+                    def policiesJson = readJSON text: env.POLICIES_JSON_RESPONSE
+                    def existingPolicies = policiesJson.automatedPolicies
+        
+                    def order = 1
+        
+                    configJson.each { policy ->
+                        def matchingPolicy = existingPolicies.find { existing ->
+                            existing.groupId == policy.groupId &&
+                            existing.assetId == policy.assetId &&
+                            existing.assetVersion == policy.assetVersion
                         }
+                        if (matchingPolicy) {
+                            echo "Policy exists: ${policy.assetId}. ID: ${matchingPolicy.id}. Order: ${order}"
+                            policy.policyId = matchingPolicy.id 
+                            
+                            def configData = groovy.json.JsonOutput.toJson(policy.configurationData).replaceAll("'", "'\\\\''")
+                            def updateResponse = sh(script: """
+                                curl --location --request PATCH 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies/${matchingPolicy.id}' \
+                                --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
+                                --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
+                                --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
+                                --header 'Content-Type: application/json' \
+                                --silent \
+                                --data '{
+                                    "ruleOfApplication": {
+                                        "technologies": [
+                                            "flexGateway"
+                                        ],
+                                        "environmentId": "${params.ENVIRONMENT_ID}",
+                                        "organizationId": "${params.ORGANIZATION_ID}"
+                                    },
+                                    "groupId": "${policy.groupId}",
+                                    "assetId": "${policy.assetId}",
+                                    "assetVersion": "${policy.assetVersion}",
+                                    "order": ${order},
+                                    "configurationData": ${configData}
+                                }' \
+                                --write-out '%{http_code}' --max-time ${env.CURL_TIMEOUT} --output /dev/null
+                            """, returnStdout: true).trim()
+        
+                            if (updateResponse == '200') {
+                                echo "Policy updated successfully: ${policy.assetId} with Order: ${order}"
+                            } else {
+                                error "Error updating policy: ${policy.assetId}. Response code: ${updateResponse}"
+                            }
+                            
+                        } else {
+                            echo "Policy does not exist: ${policy.assetId}. Order: ${order}"
+                            
+                            // Crear la política si no existe
+                            def configData = groovy.json.JsonOutput.toJson(policy.configurationData).replaceAll("'", "'\\\\''")
+                            def createResponse = sh(script: """
+                                curl --location 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies' \
+                                --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
+                                --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
+                                --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
+                                --header 'Content-Type: application/json' \
+                                --silent \
+                                --data '{
+                                    "ruleOfApplication": {
+                                        "technologies": [
+                                            "flexGateway"
+                                        ],
+                                        "environmentId": "${params.ENVIRONMENT_ID}",
+                                        "organizationId": "${params.ORGANIZATION_ID}"
+                                    },
+                                    "groupId": "${policy.groupId}",
+                                    "assetId": "${policy.assetId}",
+                                    "assetVersion": "${policy.assetVersion}",
+                                    "order": ${order},
+                                    "configurationData": ${configData}
+                                }' \
+                                --write-out '%{http_code}' --max-time ${env.CURL_TIMEOUT} --output /dev/null
+                            """, returnStdout: true).trim()
+        
+                            if (createResponse == '201') {
+                                echo "Policy created successfully: ${policy.assetId} with Order: ${order}"
+                            } else {
+                                error "Error creating policy: ${policy.assetId}. Response code: ${createResponse}"
+                            }
+                            
+                        }
+                        
+                        order++
                     }
                 }
             }
