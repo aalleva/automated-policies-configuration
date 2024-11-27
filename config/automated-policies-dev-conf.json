@@ -1,5 +1,11 @@
 [
     {
+        "groupId": "a679f308-ca49-4f47-850e-b7fc0b2825bb",
+        "assetId": "pdk-basic-logging-filter",
+        "assetVersion": "2.3.0",
+        "configurationData": {},
+    },
+    {
         "groupId": "68ef9520-24e9-4cf2-b2f5-620025690913",
         "assetId": "client-id-enforcement",
         "assetVersion": "1.3.2",
@@ -17,11 +23,5 @@
             "stringProperty": "1234567890abcdef1234567890abcdef",
             "headerSelector": "#[attributes.headers['ApiKey']]"
         }
-    },
-    {
-        "groupId": "a679f308-ca49-4f47-850e-b7fc0b2825bb",
-        "assetId": "pdk-basic-logging-filter",
-        "assetVersion": "2.2.1",
-        "configurationData": {},
     }
 ]
