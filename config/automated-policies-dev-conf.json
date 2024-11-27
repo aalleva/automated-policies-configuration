@@ -1,5 +1,14 @@
 [
     {
+        "groupId": "a679f308-ca49-4f47-850e-b7fc0b2825bb",
+        "assetId": "caixaws-dev",
+        "assetVersion": "1.0.0-20241015091603",
+        "configurationData": {
+            "stringProperty": "1234567890abcdef1234567890abcdef",
+            "headerSelector": "#[attributes.headers['ApiKey']]"
+        }
+    },
+    {
         "groupId": "68ef9520-24e9-4cf2-b2f5-620025690913",
         "assetId": "client-id-enforcement",
         "assetVersion": "1.3.2",
@@ -7,15 +16,6 @@
             "credentialsOriginHasHttpBasicAuthenticationHeader": "customExpression",
             "clientIdExpression": "#[attributes.headers['client_id']]",
             "clientSecretExpression": "#[attributes.headers['client_secret']]"
-        }
-    },
-    {
-        "groupId": "a679f308-ca49-4f47-850e-b7fc0b2825bb",
-        "assetId": "caixaws-dev",
-        "assetVersion": "1.0.0-20241015091603",
-        "configurationData": {
-            "stringProperty": "1234567890abcdef1234567890abcdef",
-            "headerSelector": "#[attributes.headers['ApiKey']]"
         }
     },
     {
