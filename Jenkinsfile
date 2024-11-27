@@ -58,7 +58,6 @@ pipeline {
                         error "Configuration file not found: ${configFilePath}"
                     }
 
-                    // Read and parse the configuration JSON file
                     def configJsonContent = readFile(configFilePath)
                     env.CONFIG_JSON = configJsonContent
                 }
@@ -94,6 +93,7 @@ pipeline {
                 }
             }
         }
+        
         stage('List Automated Policies') {
             steps {
                 script {
@@ -118,6 +118,7 @@ pipeline {
                 }
             }
         }
+        
         stage('Check Existing Policies') {
             steps {
                 script {
@@ -125,13 +126,14 @@ pipeline {
                     def policiesJson = readJSON text: env.POLICIES_JSON_RESPONSE
                     def existingPolicies = policiesJson.automatedPolicies
         
+                    def configPolicyKeys = configJson.collect { "${it.groupId}-${it.assetId}-${it.assetVersion}" }
+                    def policiesToDelete = []
                     def order = 1
         
                     configJson.each { policy ->
                         def matchingPolicy = existingPolicies.find { existing ->
                             existing.groupId == policy.groupId &&
-                            existing.assetId == policy.assetId &&
-                            existing.assetVersion == policy.assetVersion
+                            existing.assetId == policy.assetId
                         }
                         if (matchingPolicy) {
                             echo "Policy exists: ${policy.assetId}. ID: ${matchingPolicy.id}. Order: ${order}"
@@ -164,6 +166,23 @@ pipeline {
         
                             if (updateResponse == '200') {
                                 echo "Policy updated successfully: ${policy.assetId} with Order: ${order}"
+                                
+                                def implementationResponse = sh(script: """
+                                    curl --location --request POST 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies/${matchingPolicy.id}/implementationAssets' \
+                                        --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
+                                        --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
+                                        --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
+                                        --header 'Content-Type: application/json' \
+                                        --silent \
+                                        --write-out '%{http_code}' --max-time ${env.CURL_TIMEOUT} --output /dev/null
+                                    """, returnStdout: true).trim()
+        
+                                if (implementationResponse == '201') {
+                                    echo "Policy implementation updated successfully: ${policy.assetId}"
+                                } else {
+                                    error "Error updating policy implementation: ${policy.assetId}. Response code: ${implementationResponse}"
+                                }
+                                
                             } else {
                                 error "Error updating policy: ${policy.assetId}. Response code: ${updateResponse}"
                             }
@@ -201,11 +220,34 @@ pipeline {
                                 echo "Policy created successfully: ${policy.assetId} with Order: ${order}"
                             } else {
                                 error "Error creating policy: ${policy.assetId}. Response code: ${createResponse}"
-                            }
-                            
+                            }  
                         }
-                        
                         order++
+                    }
+                    
+                    existingPolicies.each { existingPolicy ->
+                        def key = "${existingPolicy.groupId}-${existingPolicy.assetId}-${existingPolicy.assetVersion}"
+                        if (!configPolicyKeys.contains(key)) {
+                            echo "Policy not in configuration: ${existingPolicy.assetId}. ID: ${existingPolicy.id}"
+                            policiesToDelete << existingPolicy.id
+                        }
+                    }
+        
+                    policiesToDelete.each { policyId ->
+                        echo "Deleting Policy ID: ${policyId}"
+                        def deleteResponse = sh(script: """
+                            curl --location --request DELETE 'https://${env.MULESOFT_API_URL}/apimanager/api/v1/organizations/${params.ORGANIZATION_ID}/automated-policies/${policyId}' \
+                            --header 'Authorization: ${env.AUTHORIZATION_TOKEN}' \
+                            --header 'x-anypnt-org-id: ${params.ORGANIZATION_ID}' \
+                            --header 'x-anypnt-env-id: ${params.ENVIRONMENT_ID}' \
+                            --write-out '%{http_code}' --silent --max-time ${env.CURL_TIMEOUT} --output /dev/null
+                        """, returnStdout: true).trim()
+        
+                        if (deleteResponse == '204') {
+                            echo "Policy ID ${policyId} deleted successfully."
+                        } else {
+                            error "Error deleting Policy ID ${policyId}: ${deleteResponse}"
+                        }
                     }
                 }
             }
@@ -215,6 +257,7 @@ pipeline {
     post {
       always {
           sh "rm -f policies_response.json"
+          cleanWs()
       }
     }
 }
